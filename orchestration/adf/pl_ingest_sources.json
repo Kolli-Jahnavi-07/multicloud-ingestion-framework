@@ -1,0 +1,134 @@
+{
+  "name": "pl_ingest_sources",
+  "properties": {
+    "description": "Runs every configured source in parallel on an Azure Batch pool (container image with this repo), each loading Snowflake. One failed source does not block the others; the pipeline alerts and fails at the end if any did.",
+    "parameters": {
+      "sources": {
+        "type": "array",
+        "defaultValue": [
+          "credit_applications",
+          "dealers",
+          "vehicle_valuations"
+        ]
+      }
+    },
+    "variables": {
+      "failed": {
+        "type": "Array"
+      }
+    },
+    "activities": [
+      {
+        "name": "ForEachSource",
+        "type": "ForEach",
+        "typeProperties": {
+          "items": {
+            "value": "@pipeline().parameters.sources",
+            "type": "Expression"
+          },
+          "isSequential": false,
+          "batchCount": 4,
+          "activities": [
+            {
+              "name": "RunIngestion",
+              "type": "Custom",
+              "linkedServiceName": {
+                "referenceName": "ls_azure_batch",
+                "type": "LinkedServiceReference"
+              },
+              "policy": {
+                "timeout": "0.02:00:00",
+                "retry": 2,
+                "retryIntervalInSeconds": 120
+              },
+              "typeProperties": {
+                "command": {
+                  "value": "@concat('python -m ingest run ', item(), ' --warehouse snowflake --json')",
+                  "type": "Expression"
+                },
+                "resourceLinkedService": {
+                  "referenceName": "ls_adls_lake",
+                  "type": "LinkedServiceReference"
+                },
+                "folderPath": "landing/jobs"
+              }
+            },
+            {
+              "name": "RecordFailure",
+              "type": "AppendVariable",
+              "dependsOn": [
+                {
+                  "activity": "RunIngestion",
+                  "dependencyConditions": [
+                    "Failed"
+                  ]
+                }
+              ],
+              "typeProperties": {
+                "variableName": "failed",
+                "value": {
+                  "value": "@item()",
+                  "type": "Expression"
+                }
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "AnySourceFailed",
+        "type": "IfCondition",
+        "dependsOn": [
+          {
+            "activity": "ForEachSource",
+            "dependencyConditions": [
+              "Completed"
+            ]
+          }
+        ],
+        "typeProperties": {
+          "expression": {
+            "value": "@greater(length(variables('failed')), 0)",
+            "type": "Expression"
+          },
+          "ifTrueActivities": [
+            {
+              "name": "AlertOnCall",
+              "type": "WebActivity",
+              "typeProperties": {
+                "url": "@pipeline().globalParameters.alertWebhookUrl",
+                "method": "POST",
+                "body": {
+                  "value": "@json(concat('{\"text\": \"Ingestion failed for: ', join(variables('failed'), ', '), '\"}'))",
+                  "type": "Expression"
+                }
+              }
+            },
+            {
+              "name": "FailPipeline",
+              "type": "Fail",
+              "dependsOn": [
+                {
+                  "activity": "AlertOnCall",
+                  "dependencyConditions": [
+                    "Completed"
+                  ]
+                }
+              ],
+              "typeProperties": {
+                "message": {
+                  "value": "@concat('Failed sources: ', join(variables('failed'), ', '))",
+                  "type": "Expression"
+                },
+                "errorCode": "INGESTION_FAILED"
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "annotations": [
+      "ingestion-framework"
+    ]
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "name": "tr_hourly",
+  "properties": {
+    "type": "ScheduleTrigger",
+    "typeProperties": {
+      "recurrence": { "frequency": "Hour", "interval": 1, "startTime": "2026-01-01T00:05:00Z", "timeZone": "UTC" }
+    },
+    "pipelines": [{ "pipelineReference": { "referenceName": "pl_ingest_sources", "type": "PipelineReference" } }]
+  }
+}
