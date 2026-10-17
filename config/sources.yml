@@ -1,0 +1,88 @@
+# Every source is configuration, not code. Adding a feed = adding an entry here.
+#
+# Values like ${NAME:-default} are read from the environment, so the same file drives the
+# local demo (defaults) and production (env vars set by the orchestrator / CI secrets).
+
+landings:
+  # AWS: S3 bucket behind a Snowflake storage integration (infra/terraform/aws)
+  aws: ${LANDING_AWS_URI:-data/lake/aws}
+  # Azure: ADLS Gen2 container behind a Snowflake storage integration (infra/terraform/azure)
+  azure: ${LANDING_AZURE_URI:-data/lake/azure}
+
+state: ${STATE_URI:-data/lake/_state}
+
+warehouse:
+  database: LOANS
+  schema: RAW
+  # External stages pointing at each landing (snowflake/stages.sql)
+  stages:
+    aws: RAW.AWS_LANDING
+    azure: RAW.AZURE_LANDING
+
+sources:
+  - name: credit_applications
+    description: Credit decisions from the bureau partner's REST API
+    type: rest_api
+    landing: aws
+    options:
+      base_url: ${BUREAU_API_URL:-http://127.0.0.1:8765}
+      endpoint: /v1/applications
+      page_size: 250
+      updated_since_param: updated_since
+      auth_token_env: BUREAU_API_TOKEN
+      max_retries: 5
+    incremental:
+      column: updated_at
+      lookback_minutes: 15          # re-read a small overlap; the MERGE makes it harmless
+    primary_key: [application_id]
+    contract:
+      on_new_columns: evolve
+      columns:
+        application_id: {type: string, nullable: false}
+        dealer_id:      {type: string, nullable: false}
+        applicant_state: {type: string}
+        credit_score:   {type: int, min: 300, max: 850}
+        amount_requested: {type: decimal}
+        decision:       {type: string, nullable: false, allowed: [APPROVED, DECLINED, PENDING, COUNTER_OFFER]}
+        apr_offered:    {type: decimal}
+        updated_at:     {type: timestamp, nullable: false}
+
+  - name: dealers
+    description: Dealer master data from the dealer-management Postgres database
+    type: sql
+    landing: azure
+    options:
+      url: ${DEALERS_DB_URL:-sqlite:///data/demo/dealers.db}
+      table: dealers
+    incremental:
+      column: modified_at
+      lookback_minutes: 0
+    primary_key: [dealer_id]
+    contract:
+      on_new_columns: evolve
+      columns:
+        dealer_id:   {type: string, nullable: false}
+        dealer_name: {type: string, nullable: false}
+        state:       {type: string}
+        region:      {type: string}
+        is_active:   {type: bool, nullable: false}
+        modified_at: {type: timestamp, nullable: false}
+
+  - name: vehicle_valuations
+    description: Daily used-vehicle valuation file from a data vendor (SFTP drop)
+    type: files
+    landing: azure
+    options:
+      path: ${VALUATIONS_DROP:-data/demo/vendor_drop}
+      pattern: "valuations_*.csv"
+    primary_key: [vin, valuation_date]
+    contract:
+      on_new_columns: fail          # vendor contract: schema changes must be agreed first
+      columns:
+        vin:            {type: string, nullable: false}
+        make:           {type: string}
+        model:          {type: string}
+        model_year:     {type: int, min: 1990, max: 2027}
+        mileage:        {type: int, min: 0}
+        retail_value:   {type: decimal, min: 0}
+        valuation_date: {type: date, nullable: false}
