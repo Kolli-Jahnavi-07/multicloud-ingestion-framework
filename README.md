@@ -152,4 +152,4 @@ PYTHONPATH=src python -m ingest run --warehouse snowflake
 
 ## Author
 
-**Sai Jahnavi Kolli**, Data Engineer · [saijahnavikolli.com](https://saijahnavikolli.com) · kollijahnavi07@gmail.com
+**Sai Jahnavi Kolli**, Data Engineer · kollijahnavi07@gmail.com
